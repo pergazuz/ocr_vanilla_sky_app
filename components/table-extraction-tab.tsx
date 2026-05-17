@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useEffect, useTransition, useActionState } from "react"
+import { useState, useEffect, useActionState } from "react"
 import { useFormStatus } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -18,10 +18,9 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Loader2, Wand2, XCircle, Download, Copy, PlusCircle, Trash2, BookOpen, Sparkles } from "lucide-react"
+import { Loader2, Wand2, XCircle, Download, Copy, PlusCircle, Trash2, BookOpen } from "lucide-react"
 import type { Chunk } from "@/app/page"
 import { extractTableData } from "@/app/actions/extract-table-action"
-import { suggestSchemaAction } from "@/app/actions/suggest-schema-action"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
@@ -128,10 +127,23 @@ function ExtractionFormContent({
 }) {
   const [schemaFields, setSchemaFields] = useState<SchemaField[]>([])
   const [generatedMarkdown, setGeneratedMarkdown] = useState<string>("")
-  const [isSuggesting, startSuggestionTransition] = useTransition()
+  const [fileBase64, setFileBase64] = useState<string>("")
   const { toast } = useToast()
 
   const [formState, formAction, isActionPending] = useActionState(extractTableData, actionInitialState)
+
+  useEffect(() => {
+    if (!file) {
+      setFileBase64("")
+      return
+    }
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const result = reader.result as string
+      setFileBase64(result.split(",")[1] ?? "")
+    }
+    reader.readAsDataURL(file)
+  }, [file])
 
   useEffect(() => {
     setGeneratedMarkdown(generateMarkdownFromSchemaFields(schemaFields))
@@ -156,23 +168,6 @@ function ExtractionFormContent({
     const newFields = template.fields.map((field) => ({ ...field, id: crypto.randomUUID() }))
     setSchemaFields(newFields)
     toast({ title: "Template Loaded", description: `The "${template.name}" template has been loaded.` })
-  }
-
-  const handleSuggestSchema = () => {
-    startSuggestionTransition(async () => {
-      const result = await suggestSchemaAction(JSON.stringify(ocrResult.chunks), imageBase64)
-      if (result.success && result.data) {
-        const suggestedFields = result.data.map((field) => ({ ...field, id: crypto.randomUUID() }))
-        setSchemaFields(suggestedFields)
-        toast({ title: "Schema Suggested", description: "AI has generated a schema based on your document." })
-      } else {
-        toast({
-          title: "Suggestion Failed",
-          description: result.error || "An unknown error occurred.",
-          variant: "destructive",
-        })
-      }
-    })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -216,30 +211,16 @@ function ExtractionFormContent({
   return (
     <form action={formAction} className="flex flex-col h-full">
       <div className="p-4 border-b dark:border-gray-800 space-y-4 flex-shrink-0">
-        <input type="hidden" name="chunks" value={JSON.stringify(ocrResult.chunks)} />
-        <input type="hidden" name="imageBase64" value={imageBase64 || ""} />
+        <input type="hidden" name="fileData" value={fileBase64} />
+        <input type="hidden" name="filename" value={file?.name ?? "document.pdf"} />
         <input type="hidden" name="schema" value={generatedMarkdown} />
         <div>
           <div className="flex justify-between items-center mb-2">
             <Label className="text-sm font-medium">Extraction Schema</Label>
             <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleSuggestSchema}
-                disabled={isSuggesting || isActionPending}
-              >
-                {isSuggesting ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-2 h-4 w-4" />
-                )}
-                Suggest Fields
-              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline" size="sm" disabled={isActionPending}>
+                  <Button type="button" variant="outline" size="sm" disabled={isActionPending} className="flex items-center gap-1">
                     <BookOpen className="mr-2 h-4 w-4" /> Templates
                   </Button>
                 </DropdownMenuTrigger>
@@ -266,7 +247,7 @@ function ExtractionFormContent({
           <ScrollArea className="h-48 border rounded-md p-2 space-y-2 bg-muted/30 dark:bg-muted/20">
             {schemaFields.length === 0 && (
               <p className="text-sm text-muted-foreground text-center py-4">
-                No fields defined. Click "Add Field", select a template, or suggest fields with AI.
+                No fields defined. Click "Add Field" or select a template.
               </p>
             )}
             {schemaFields.map((field) => (

@@ -1,13 +1,12 @@
 "use server"
 
 import { generateObject } from "ai"
-import { createOpenAI } from "@ai-sdk/openai"
+import { createAnthropic } from "@ai-sdk/anthropic"
 import { z } from "zod"
 import type { Chunk } from "@/app/page"
 
-const nvidia = createOpenAI({
-  apiKey: process.env.NVIDIA_API_KEY,
-  baseURL: process.env.NVIDIA_BASE_URL ?? "https://integrate.api.nvidia.com/v1",
+const anthropic = createAnthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 })
 
 function cleanChunks(data: Chunk[]): { chunk_type: string; text: string }[] {
@@ -17,7 +16,6 @@ function cleanChunks(data: Chunk[]): { chunk_type: string; text: string }[] {
   }))
 }
 
-// Define the schema for a single field
 const fieldSchema = z.object({
   name: z.string().describe("The field name in snake_case, e.g., 'invoice_total' or 'item_description'."),
   type: z
@@ -26,14 +24,13 @@ const fieldSchema = z.object({
   description: z.string().describe("A brief, helpful description of what the field represents."),
 })
 
-// Define the root schema as an object containing an array of fields
 const schemaSuggestionRootSchema = z.object({
   suggestedFields: z.array(fieldSchema).describe("An array of suggested schema fields for the document."),
 })
 
 export async function suggestSchemaAction(chunksString: string, _imageBase64: string | null) {
-  if (!process.env.NVIDIA_API_KEY) {
-    return { success: false, error: "NVIDIA API key is not configured on the server." }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { success: false, error: "Anthropic API key is not configured on the server." }
   }
 
   if (!chunksString) {
@@ -44,7 +41,7 @@ export async function suggestSchemaAction(chunksString: string, _imageBase64: st
     const chunks = JSON.parse(chunksString) as Chunk[]
     const proprocessData = JSON.stringify(cleanChunks(chunks), null, 2)
 
-    const systemPrompt = `You are an expert data analyst. Your task is to analyze the provided OCR text and document image to suggest a structured data schema for extracting information.
+    const systemPrompt = `You are an expert data analyst. Your task is to analyze the provided OCR text to suggest a structured data schema for extracting information.
 Identify all key fields, including header information, line items, and summary totals.
 Return your response as a JSON object. This object must have a single key 'suggestedFields', which contains an array of field objects.
 Each field object MUST have the following keys:
@@ -61,7 +58,7 @@ For example, if an invoice has line items, instead of one 'items' field of type 
   - 'item_total_amount' (type: float, description: "Total amount for the line item (quantity * unit price)")
 These fields will represent the columns for the line items. The extraction process will handle creating multiple rows.
 
-Ensure your entire response is a single JSON object strictly conforming to this structure and these rules. Do not include any other text, explanations, or markdown formatting outside the JSON object.
+Ensure your entire response is a single JSON object strictly conforming to this structure and these rules.
 The 'type' property for every field in 'suggestedFields' must be one of 'string', 'integer', 'float', or 'date'.`
 
     const userPrompt = `
@@ -69,68 +66,31 @@ The 'type' property for every field in 'suggestedFields' must be one of 'string'
 ${proprocessData}
 --- OCR JSON END ---
 
-Based on the OCR data and the document image, suggest a schema following all the rules above. Remember, no 'array' types.`
-
-    const messages: any = [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ]
+Based on the OCR data, suggest a schema following all the rules above. Remember, no 'array' types.`
 
     const { object } = await generateObject({
-      model: nvidia("deepseek-ai/deepseek-v4-pro"),
+      model: anthropic("claude-haiku-4-5-20251001"),
       schema: schemaSuggestionRootSchema,
-      messages: messages,
+      system: systemPrompt,
+      prompt: userPrompt,
       maxTokens: 2500,
       temperature: 0.05,
     })
 
     return { success: true, data: object.suggestedFields }
   } catch (error: any) {
-    console.error("Error suggesting schema:", error) // Full error object for server logs
+    console.error("Error suggesting schema:", error)
 
     let errorMessage = "An unknown error occurred while suggesting the schema."
     if (error.message) {
       errorMessage = error.message
     }
 
-    // Check if it's an AI SDK error and try to extract more details
-    // The structure of AI SDK errors can vary, so we check for common properties.
-    if (error.name?.includes("AIError") || error.constructor?.name?.includes("AIError")) {
-      const aiError = error as any // Cast to any to access potential properties
-      errorMessage = `AI SDK Error: ${aiError.message || "No message"}`
-      if (aiError.type) errorMessage += ` (Type: ${aiError.type})`
-      if (aiError.code) errorMessage += ` (Code: ${aiError.code})`
-
-      // Attempt to get underlying Zod validation error if present in cause
-      let cause = aiError.cause
-      while (cause) {
-        if (cause.constructor?.name === "ZodError") {
-          const zodError = cause as z.ZodError
-          const zodIssues = zodError.errors
-            .map((e) => `${e.path.join(".")} - ${e.message} (received: ${JSON.stringify((e as any).received)})`)
-            .join("; ")
-          errorMessage += `\nUnderlying Zod validation issue: ${zodIssues}`
-          break
-        }
-        cause = cause.cause
-      }
-
-      if (aiError.text) {
-        // If raw text from AI is available in the error
-        errorMessage += `\nAI Raw Response Text (first 500 chars): ${String(aiError.text).substring(0, 500)}...`
-      }
-    } else if (error instanceof z.ZodError) {
-      // This case might not be hit if generateObject wraps ZodErrors in AIError
+    if (error instanceof z.ZodError) {
       const zodIssues = error.errors
         .map((e) => `${e.path.join(".")} - ${e.message} (received: ${JSON.stringify((e as any).received)})`)
         .join("; ")
-      errorMessage = `Zod validation error directly caught: ${zodIssues}`
+      errorMessage = `Zod validation error: ${zodIssues}`
     }
 
     return { success: false, error: errorMessage }
