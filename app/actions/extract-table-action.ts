@@ -1,8 +1,13 @@
 "use server"
 
 import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+import { createOpenAI } from "@ai-sdk/openai"
 import type { Chunk } from "@/app/page"
+
+const nvidia = createOpenAI({
+  apiKey: process.env.NVIDIA_API_KEY,
+  baseURL: process.env.NVIDIA_BASE_URL ?? "https://integrate.api.nvidia.com/v1",
+})
 
 interface FormState {
   success: boolean
@@ -35,31 +40,20 @@ function parseCsv(csvText: string): Record<string, string>[] {
 }
 
 export async function extractTableData(prevState: FormState, formData: FormData): Promise<FormState> {
-  if (!process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is not set in environment variables.")
+  if (!process.env.NVIDIA_API_KEY) {
+    console.error("NVIDIA_API_KEY is not set in environment variables.")
     return {
       success: false,
       data: null,
-      error:
-        "OpenAI API key is not configured on the server. Please set the OPENAI_API_KEY environment variable in your Vercel project settings.",
+      error: "NVIDIA API key is not configured on the server. Please set the NVIDIA_API_KEY environment variable.",
     }
   }
 
   const schema = formData.get("schema") as string
   const chunksString = formData.get("chunks") as string
-  const imageBase64 = formData.get("imageBase64") as string
 
   if (!schema || !chunksString) {
-    // imageBase64 can be empty if no preview
     return { success: false, data: null, error: "Missing required data: schema or chunks." }
-  }
-
-  if (!imageBase64) {
-    console.warn(
-      "Image base64 string is empty. Proceeding without image context for AI if model supports it, but this is not ideal for OCR extraction.",
-    )
-    // Depending on the model, you might want to return an error here or adjust the prompt.
-    // For now, we'll let it proceed, but the AI might not perform well.
   }
 
   try {
@@ -95,14 +89,10 @@ ${proprocessData}
       },
     ]
 
-    if (imageBase64) {
-      messages[0].content.push({ type: "image", image: Buffer.from(imageBase64, "base64") })
-    }
-
     const { text } = await generateText({
-      model: openai("gpt-4o-mini"), // Ensure your API key supports this model
+      model: nvidia("deepseek-ai/deepseek-v4-pro"),
       messages: messages,
-      temperature: 0.1, // Lower temperature for more deterministic output
+      temperature: 0.1,
     })
 
     if (!text || text.trim() === "") {
@@ -136,13 +126,11 @@ ${proprocessData}
     if (error.message) {
       errorMessage = error.message
     }
-    // Check for specific OpenAI API error structures if available
     if (error.status === 401) {
-      errorMessage = "OpenAI API authentication failed. Please check your API key."
+      errorMessage = "NVIDIA API authentication failed. Please check your API key."
     } else if (error.status === 429) {
-      errorMessage = "OpenAI API rate limit exceeded. Please try again later."
+      errorMessage = "NVIDIA API rate limit exceeded. Please try again later."
     } else if (error.name === "AIError") {
-      // From Vercel AI SDK
       errorMessage = `AI SDK Error: ${error.message} (Type: ${error.type}, Code: ${error.code})`
     }
 

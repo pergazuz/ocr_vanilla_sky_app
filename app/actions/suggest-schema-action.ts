@@ -1,9 +1,14 @@
 "use server"
 
 import { generateObject } from "ai"
-import { openai } from "@ai-sdk/openai"
+import { createOpenAI } from "@ai-sdk/openai"
 import { z } from "zod"
 import type { Chunk } from "@/app/page"
+
+const nvidia = createOpenAI({
+  apiKey: process.env.NVIDIA_API_KEY,
+  baseURL: process.env.NVIDIA_BASE_URL ?? "https://integrate.api.nvidia.com/v1",
+})
 
 function cleanChunks(data: Chunk[]): { chunk_type: string; text: string }[] {
   return data.map((item) => ({
@@ -26,9 +31,9 @@ const schemaSuggestionRootSchema = z.object({
   suggestedFields: z.array(fieldSchema).describe("An array of suggested schema fields for the document."),
 })
 
-export async function suggestSchemaAction(chunksString: string, imageBase64: string | null) {
-  if (!process.env.OPENAI_API_KEY) {
-    return { success: false, error: "OpenAI API key is not configured on the server." }
+export async function suggestSchemaAction(chunksString: string, _imageBase64: string | null) {
+  if (!process.env.NVIDIA_API_KEY) {
+    return { success: false, error: "NVIDIA API key is not configured on the server." }
   }
 
   if (!chunksString) {
@@ -73,20 +78,16 @@ Based on the OCR data and the document image, suggest a schema following all the
       },
       {
         role: "user",
-        content: [{ type: "text", text: userPrompt }],
+        content: userPrompt,
       },
     ]
 
-    if (imageBase64) {
-      messages[1].content.push({ type: "image", image: Buffer.from(imageBase64, "base64") })
-    }
-
     const { object } = await generateObject({
-      model: openai("gpt-4o-mini"),
+      model: nvidia("deepseek-ai/deepseek-v4-pro"),
       schema: schemaSuggestionRootSchema,
       messages: messages,
-      maxTokens: 2500, // Increased maxTokens further
-      temperature: 0.05, // Lowered temperature for stricter adherence
+      maxTokens: 2500,
+      temperature: 0.05,
     })
 
     return { success: true, data: object.suggestedFields }
